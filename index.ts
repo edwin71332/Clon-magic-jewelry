@@ -1,13 +1,14 @@
 import Phaser from "phaser";
 import { gemas } from "./src/gemas";
 import { CONFIG_JUEGO } from "./src/config-juego";
-import { piezas } from "./src/PIEZAS"
-import { tablero } from "./src/tablero"
+import { piezas } from "./src/PIEZAS";
+import { tablero } from "./src/tablero";
 import { Marcador } from "./src/marcador";
 import { fondos } from "./src/fondo";
 import { sonidos } from "./src/sonidos";
 import { inicio } from "./src/inicio";
 import { ControlesTactiles } from "./src/controles-tactiles";
+import { AgenteIA } from "./src/agente-ia";
 
 
 export class tetris extends Phaser.Scene {
@@ -33,6 +34,13 @@ export class tetris extends Phaser.Scene {
   private caidaTimer!: Phaser.Time.TimerEvent; // Referencia al temporizador de caída automática
   private botonPausa?: Phaser.GameObjects.Text;
   private textoPausa?: Phaser.GameObjects.Text;
+
+  // Integración del Agente de Inteligencia Artificial
+  private agenteIA!: AgenteIA;
+  private modoIA: boolean = false;
+  private teclaI!: Phaser.Input.Keyboard.Key;
+  private botonModoIA?: Phaser.GameObjects.Text;
+  private turnoIAPendiente: boolean = false;
 
 
   x = CONFIG_JUEGO.ADD_GEMA_X
@@ -78,7 +86,7 @@ export class tetris extends Phaser.Scene {
       onBajarRapido: () => {
         this.bajarPieza(true);
       },
-      puedeInteractuar: () => !this.enPausa && !this.juegoPausado,
+      puedeInteractuar: () => !this.enPausa && !this.juegoPausado && !this.modoIA,
     });
 
     this.load.start();
@@ -103,7 +111,11 @@ export class tetris extends Phaser.Scene {
     this.control = this.input.keyboard!.createCursorKeys();
     this.teclaZ = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
     this.teclaEnter = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
+    this.teclaI = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.I);
 
+    // Inicializar el Agente IA con el modelo del Experimento E (Récord 388 gemas)
+    this.agenteIA = new AgenteIA();
+    this.agenteIA.inicializar("modelo_magic_jewelry_experimento_e.onnx");
 
     this.caidaTimer = this.time.addEvent({
       delay: 1200,
@@ -111,6 +123,19 @@ export class tetris extends Phaser.Scene {
       callback: () => {
         this.bajarPieza();
       }
+    });
+
+    // Botón táctil para alternar Modo Jugador / Modo IA
+    this.botonModoIA = this.add.text(320, 16, "🎮 JUGADOR", {
+      fontFamily: '"Lucida Console", Monaco, monospace',
+      fontSize: "13px",
+      color: "#00ffcc",
+      backgroundColor: "#111111",
+      padding: { x: 6, y: 3 },
+    }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true }).setDepth(100);
+
+    this.botonModoIA.on("pointerdown", () => {
+      this.alternarModoIA();
     });
 
     // Botón táctil para pausar/reanudar en celular
@@ -128,21 +153,26 @@ export class tetris extends Phaser.Scene {
   }
 
   update() {
-    //Alternar pausa con ENTER en cualquier momento mientras no sea Game Ove 
+    // Alternar pausa con ENTER en cualquier momento mientras no sea Game Over
     if (Phaser.Input.Keyboard.JustDown(this.teclaEnter)) {
       this.alternarPausa();
     }
 
+    // Alternar modo IA con la tecla I
+    if (Phaser.Input.Keyboard.JustDown(this.teclaI)) {
+      this.alternarModoIA();
+    }
 
-    //  Si el juego está pausado por el usuario se congela todo el ciclo
+    // Si el juego está pausado por el usuario se congela todo el ciclo
     if (this.juegoPausado) return;
 
-
-    //  Si el juego está   resolviendo animaciones  ignoramos controles
+    // Si el juego está resolviendo animaciones ignoramos controles
     if (this.enPausa) return;
 
+    // Si el modo IA está activo, el humano no controla las piezas directamente
+    if (this.modoIA) return;
 
-    //  Liberar el bloqueo de bajada si el usuario soltó la flecha abajo
+    // Liberar el bloqueo de bajada si el usuario soltó la flecha abajo
     if (this.control.down.isUp) {
       this.bloqueoBajada = false;
     }
@@ -230,6 +260,11 @@ export class tetris extends Phaser.Scene {
         this.bloqueoBajada = true;
       }
       this.enPausa = false;
+
+      // Si el modo IA está activo, planifica y ejecuta la jugada automáticamente
+      if (this.modoIA) {
+        this.ejecutarTurnoIA();
+      }
     };
 
     if (this.pieza.esMagica) {
@@ -269,17 +304,82 @@ export class tetris extends Phaser.Scene {
   }
 
 
-  // Calcula y reconfigura el temporizador de caída según el nivel
+  // Calcula y reconfigura el temporizador de caída según el nivel y el modo activo
   private actualizarVelocidadCaida(nivel: number): void {
     const { delayBaseMs, reduccionPorNivelMs, delayMinimoMs } = CONFIG_JUEGO.dificultad;
     const nuevoDelay = Math.max(delayMinimoMs, delayBaseMs - (nivel * reduccionPorNivelMs));
 
-    // Reconfigura el temporizador activo sin perder el bucle
+    // En modo IA acelera la caída a 250ms 
+    const delayFinal = this.modoIA ? Math.min(250, nuevoDelay) : nuevoDelay;
+
     this.caidaTimer.reset({
-      delay: nuevoDelay,
+      delay: delayFinal,
       callback: () => this.bajarPieza(),
       loop: true,
     });
+  }
+
+  // Alterna entre control manual del jugador y piloto automático de la IA
+  private alternarModoIA(): void {
+    this.modoIA = !this.modoIA;
+
+    if (this.botonModoIA) {
+      this.botonModoIA.setText(this.modoIA ? "🤖 MODO IA" : "🎮 JUGADOR");
+      this.botonModoIA.setColor(this.modoIA ? "#ff0055" : "#00ffcc");
+    }
+
+    const nivelActual = this.marcador ? this.marcador.nivelFondo : 0;
+    this.actualizarVelocidadCaida(nivelActual);
+
+    // Si se activa mientras una pieza está esperando arriba, ejecuta de inmediato
+    if (this.modoIA && !this.enPausa && !this.juegoPausado) {
+      this.ejecutarTurnoIA();
+    }
+  }
+
+  // Ejecuta la decisión táctica de la IA sobre la pieza actual 
+  private async ejecutarTurnoIA(): Promise<void> {
+    if (!this.modoIA || this.enPausa || this.juegoPausado || this.turnoIAPendiente) return;
+    this.turnoIAPendiente = true;
+
+    try {
+      const piezaObjetivo = this.pieza;
+      const decision = await this.agenteIA.predecirJugada(
+        this.tablero.tablero,
+        this.pieza.gemasSprites,
+        this.gemas.gemas_sig
+      );
+
+      // Si la pieza cambió o el modo IA se desactivó durante la inferencia, abortar
+      if (this.pieza !== piezaObjetivo || !this.modoIA) return;
+
+      // Aplicar giros 
+      if (!this.pieza.esMagica) {
+        for (let r = 0; r < decision.rotacion; r++) {
+          if (this.pieza !== piezaObjetivo || !this.modoIA || this.juegoPausado) break;
+          this.pieza.ROTAR();
+          this.sonido.playRotate();
+          await new Promise((resolve) => setTimeout(resolve, 70));
+        }
+      }
+
+      // Desplazarse horizontalmente a la columna objetivo
+      const distancia = decision.columna - this.pieza.columna_actual;
+      const direccion: -1 | 1 = distancia > 0 ? 1 : -1;
+      const pasos = Math.abs(distancia);
+
+      for (let p = 0; p < pasos; p++) {
+        if (this.pieza !== piezaObjetivo || !this.modoIA || this.juegoPausado) break;
+        if (this.pieza.mover(direccion, this.tablero)) {
+          this.sonido.playMove(false);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+    } catch (error) {
+      console.error("[tetris] Error en turno del Agente IA:", error);
+    } finally {
+      this.turnoIAPendiente = false;
+    }
   }
 
 }

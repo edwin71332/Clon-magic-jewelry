@@ -110,9 +110,9 @@ export const CONFIG_JUEGO = {
         volumenSfx: 0.8,
     },
     dificultad: {
-        delayBaseMs: 1000,         // Nivel 0: 1 segundo por caída
-        reduccionPorNivelMs: 80,   // Se acelera 80 ms por cada nivel superado
-        delayMinimoMs: 140,        // Tope de velocidad máxima (Nivel 11 en adelante)
+        delayBaseMs: 1000,
+        reduccionPorNivelMs: 80,
+        delayMinimoMs: 140,
     }
 
 } as const;

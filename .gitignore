@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Documentación y borradores internos
+/doc/
+/docs/
+
+# Temporales de Python y entrenamiento de IA
+__pycache__/
+*.py[cod]
+ia/logs/
+ia/checkpoints/
+
+
